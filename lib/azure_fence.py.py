@@ -344,11 +344,21 @@ def get_azure_credentials(config):
 
     return credentials
 
+# get azure api version retuns the pinned version when the default version is higher than the pinned version.
+# This is to avoid breaking changes when running the fence_agent with azure skd < 5.
+def get_azure_api_version(default_version, pinned_version):
+    if pinned_version >= default_version:
+        return default_version
+
+    return pinned_version
+
 def get_azure_compute_client(config):
     from azure.mgmt.compute import ComputeManagementClient
 
     cloud_environment = get_azure_cloud_environment(config)
     credentials = get_azure_credentials(config)
+
+    compute_api_version = get_azure_api_version(ComputeManagementClient.DEFAULT_API_VERSION,COMPUTE_CLIENT_API_VERSION)
 
     if cloud_environment:
         if (config.Cloud.lower() == "stack") and not config.MetadataEndpoint:
@@ -368,20 +378,20 @@ def get_azure_compute_client(config):
                 base_url=cloud_environment.endpoints.resource_manager,
                 profile=client_profile,
                 credential_scopes=[credential_scope],
-                api_version=COMPUTE_CLIENT_API_VERSION
+                api_version=compute_api_version
             )
         except TypeError:
             compute_client = ComputeManagementClient(
                 credentials,
                 config.SubscriptionId,
                 base_url=cloud_environment.endpoints.resource_manager,
-                api_version=COMPUTE_CLIENT_API_VERSION
+                api_version=compute_api_version
             )
     else:
         compute_client = ComputeManagementClient(
             credentials,
             config.SubscriptionId,
-            api_version=COMPUTE_CLIENT_API_VERSION
+            api_version=compute_api_version
         )
     return compute_client
 
@@ -391,6 +401,8 @@ def get_azure_network_client(config):
     cloud_environment = get_azure_cloud_environment(config)
     credentials = get_azure_credentials(config)
 
+    network_api_version = get_azure_api_version(NetworkManagementClient.DEFAULT_API_VERSION,NETWORK_MGMT_CLIENT_API_VERSION)
+
     if cloud_environment:
         if (config.Cloud.lower() == "stack") and not config.MetadataEndpoint:
                 fail_usage("metadata-endpoint not specified")
@@ -409,19 +421,19 @@ def get_azure_network_client(config):
                 base_url=cloud_environment.endpoints.resource_manager,
                 profile=client_profile,
                 credential_scopes=[credential_scope],
-                api_version=NETWORK_MGMT_CLIENT_API_VERSION
+                api_version=network_api_version
             )
         except TypeError:
             network_client = NetworkManagementClient(
                 credentials,
                 config.SubscriptionId,
                 base_url=cloud_environment.endpoints.resource_manager,
-                api_version=NETWORK_MGMT_CLIENT_API_VERSION
+                api_version=network_api_version
             )
     else:
         network_client = NetworkManagementClient(
             credentials,
             config.SubscriptionId,
-            api_version=NETWORK_MGMT_CLIENT_API_VERSION
+            api_version=network_api_version
         )
     return network_client
