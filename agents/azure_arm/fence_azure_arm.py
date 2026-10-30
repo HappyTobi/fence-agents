@@ -9,6 +9,8 @@ from fencing import *
 from fencing import fail_usage, run_command, run_delay
 import azure_fence
 
+logger = logging.getLogger(__name__)
+
 def get_nodes_list(clients, options):
     result = {}
 
@@ -20,7 +22,8 @@ def get_nodes_list(clients, options):
             for vm in vms:
                 result[vm.name] = ("", None)
         except Exception as e:
-            fail_usage("Failed: %s" % e)
+            logger.debug("Failed to list virtual machines", exc_info=True)
+            fail_usage(f"Failed: {e}")
 
     return result
 
@@ -33,17 +36,18 @@ def check_unfence(clients, options):
         try:
             vms = azure_fence.get_vm_list(compute_client,rgName)
         except Exception as e:
-            fail_usage("Failed: %s" % e)
+            logger.debug("Failed to list virtual machines", exc_info=True)
+            fail_usage(f"Failed: {e}")
 
         for vm in vms:
             vmName = vm.name
             if azure_fence.get_network_state(compute_client, network_client, rgName, vmName) == "off":
-                logging.info("Found fenced node " + vmName)
+                logger.info("Found fenced node %s", vmName)
                 # dont return "off" based on network-fencing status
                 options.pop("--network-fencing", None)
                 options["--plug"] = vmName
                 if get_power_status(clients, options) == "off":
-                    logging.info("Unfencing " + vmName)
+                    logger.info("Unfencing %s", vmName)
                     options["--network-fencing"] = ""
                     options["--action"] = "on"
                     set_power_status(clients, options)
@@ -53,7 +57,7 @@ def get_power_status(clients, options):
     vmstate = { "running": "on",
                 "deallocated": "off",
                 "stopped": "off" }
-    logging.info("getting power status for VM " + options["--plug"])
+    logger.info("getting power status for VM %s", options["--plug"])
 
     if clients:
         compute_client = clients[0]
@@ -63,18 +67,19 @@ def get_power_status(clients, options):
         if "--network-fencing" in options:
             network_client = clients[1]
             netState =  azure_fence.get_network_state(compute_client, network_client, rgName, vmName)
-            logging.info("Found network state of VM: " + netState)
+            logger.info("Found network state of VM: %s", netState)
 
             # return off quickly once network is fenced instead of waiting for vm state to change
             if options["--action"] == "off" and netState == "off":
-                logging.info("Network fenced for " + vmName)
+                logger.info("Network fenced for %s", vmName)
                 return netState
 
         powerState = "unknown"
         try:
             vmStatus = azure_fence.get_vm_resource(compute_client, rgName, vmName)
         except Exception as e:
-            fail_usage("Failed: %s" % e)
+            logger.debug("Failed to get virtual machine power status", exc_info=True)
+            fail_usage(f"Failed: {e}")
 
         for status in vmStatus.instance_view.statuses:
             if status.code.startswith("PowerState"):
@@ -82,7 +87,7 @@ def get_power_status(clients, options):
                 break
 
         vmState = vmstate.get(powerState, "unknown")
-        logging.info("Found power state of VM: %s (%s)" % (vmState, powerState))
+        logger.info("Found power state of VM: %s (%s)", vmState, powerState)
 
         if "--network-fencing" in options and netState == "off":
             return "off"
@@ -96,7 +101,7 @@ def get_power_status(clients, options):
         return "off"
 
 def set_power_status(clients, options):
-    logging.info("setting power status for VM " + options["--plug"] + " to " + options["--action"])
+    logger.info("setting power status for VM %s to %s", options["--plug"], options["--action"])
 
     if clients:
         compute_client = clients[0]
@@ -107,17 +112,17 @@ def set_power_status(clients, options):
             network_client = clients[1]
 
             if (options["--action"]=="off"):
-                logging.info("Fencing network for " + vmName)
+                logger.info("Fencing network for %s", vmName)
                 azure_fence.set_network_state(compute_client, network_client, rgName, vmName, "block")
             elif (options["--action"]=="on"):
-                logging.info("Unfencing network for " + vmName)
+                logger.info("Unfencing network for %s", vmName)
                 azure_fence.set_network_state(compute_client, network_client, rgName, vmName, "unblock")
 
         if (options["--action"]=="off"):
-            logging.info("Poweroff " + vmName + " in resource group " + rgName)
+            logger.info("Poweroff %s in resource group %s", vmName, rgName)
             azure_fence.do_vm_power_off(compute_client, rgName, vmName, True)
         elif (options["--action"]=="on"):
-            logging.info("Starting " + vmName + " in resource group " + rgName)
+            logger.info("Starting %s in resource group %s", vmName, rgName)
             azure_fence.do_vm_start(compute_client, rgName, vmName)
 
 def define_new_opts():
@@ -238,7 +243,8 @@ When using network fencing the reboot-action will cause a quick-return once the 
     except ImportError:
         fail_usage("Azure Resource Manager Python SDK not found or not accessible")
     except Exception as e:
-        fail_usage("Failed: %s" % re.sub(r"^, ", r"", str(e)))
+        logger.debug("Failed to initialize Azure clients", exc_info=True)
+        fail_usage(f"Failed: {re.sub(r'^, ', r'', str(e))}")
 
     if "--network-fencing" in options:
         # use  off-action to quickly return off once network is fenced instead of
