@@ -63,12 +63,16 @@ class AzureConfiguration:
 
 def get_from_metadata(parameter):
     import requests
+    started = time.monotonic()
+    logger.debug("operation=imds parameter=%s api_version=%s outcome=request_started", parameter, AZURE_IMDS_API_VERSION)
     try:
         r = requests.get(AZURE_IMDS_ENDPOINT, params={"api-version": AZURE_IMDS_API_VERSION}, headers = {"Metadata":"true"})
-        logger.debug("metadata: %s", r.json())
-        return str(r.json()["compute"][parameter])
-    except (requests.RequestException, ValueError, KeyError, TypeError):
-        logger.warning("Not able to use metadata service. Am I running in Azure?")
+        logger.debug("operation=imds parameter=%s http_status=%s outcome=response_received elapsed_ms=%s", parameter, r.status_code, int((time.monotonic() - started) * 1000))
+        value = str(r.json()["compute"][parameter])
+        logger.debug("operation=imds parameter=%s outcome=value_read elapsed_ms=%s", parameter, int((time.monotonic() - started) * 1000))
+        return value
+    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+        logger.warning("Not able to use metadata service. Am I running in Azure? operation=imds parameter=%s error_type=%s elapsed_ms=%s", parameter, type(error).__name__, int((time.monotonic() - started) * 1000))
 
     return None
 
@@ -118,6 +122,7 @@ def get_vm_list(compute_client,rgName):
 
 # Do azue API call to shutdown a virtual machine
 def do_vm_power_off(compute_client,rgName,vmName, skipShutdown):
+    started = time.monotonic()
     try:
         # Version is not available in azure-mgmt-compute version 14.0.0 until 27.2.0
         from azure.mgmt.compute import __version__
@@ -125,15 +130,20 @@ def do_vm_power_off(compute_client,rgName,vmName, skipShutdown):
         __version__ = "0.0.0"
 
     # use different implementation call based on used version
+    logger.debug("operation=power_off vm=%s resource_group=%s sdk_version=%s skip_shutdown=%s outcome=request_started", vmName, rgName, __version__, skipShutdown)
     if (azure_dep_versions(__version__) == azure_dep_versions(AZURE_COMPUTE_VERSION_5)):
-        logger.debug("{do_vm_power_off} azure.mgtm.compute version is to old to use 'begin_power_off' use 'power_off' function")
+        logger.debug("operation=power_off sdk_method=power_off reason=legacy_sdk")
         compute_client.virtual_machines.power_off(rgName, vmName, skip_shutdown=skipShutdown)
+        logger.debug("operation=power_off vm=%s outcome=request_returned state_confirmed=false elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
         return
 
+    logger.debug("operation=power_off sdk_method=begin_power_off")
     compute_client.virtual_machines.begin_power_off(rgName, vmName, skip_shutdown=skipShutdown)
+    logger.debug("operation=power_off vm=%s outcome=request_submitted state_confirmed=false elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
 
 # Do azure API call to start a virtual machine
 def do_vm_start(compute_client,rgName,vmName):
+    started = time.monotonic()
     try:
         # Version is not available in azure-mgmt-compute version 14.0.0 until 27.2.0
         from azure.mgmt.compute import __version__
@@ -141,14 +151,19 @@ def do_vm_start(compute_client,rgName,vmName):
         __version__ = "0.0.0"
 
     # use different implementation call based on used version
+    logger.debug("operation=start vm=%s resource_group=%s sdk_version=%s outcome=request_started", vmName, rgName, __version__)
     if (azure_dep_versions(__version__) == azure_dep_versions(AZURE_COMPUTE_VERSION_5)):
-        logger.debug("{do_vm_start} azure.mgtm.compute version is to old to use 'begin_start' use 'start' function")
+        logger.debug("operation=start sdk_method=start reason=legacy_sdk")
         compute_client.virtual_machines.start(rgName, vmName)
+        logger.debug("operation=start vm=%s outcome=request_returned state_confirmed=false elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
         return
 
+    logger.debug("operation=start sdk_method=begin_start")
     compute_client.virtual_machines.begin_start(rgName, vmName)
+    logger.debug("operation=start vm=%s outcome=request_submitted state_confirmed=false elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
 
 def get_vm_resource(compute_client, rgName, vmName):
+    started = time.monotonic()
     try:
         # Version is not available in azure-mgmt-compute version 14.0.0 until 27.2.0
         from azure.mgmt.compute import __version__
@@ -156,10 +171,13 @@ def get_vm_resource(compute_client, rgName, vmName):
         __version__ = "0.0.0"
 
     # use different implementation call based on used version
+    logger.debug("operation=get_vm vm=%s resource_group=%s sdk_version=%s outcome=request_started", vmName, rgName, __version__)
     if (azure_dep_versions(__version__) <= azure_dep_versions(AZURE_RHEL8_COMPUTE_VERSION)):
-        return compute_client.virtual_machines.get(rgName, vmName, "instanceView")
-
-    return compute_client.virtual_machines.get(resource_group_name=rgName, vm_name=vmName,expand="instanceView")
+        resource = compute_client.virtual_machines.get(rgName, vmName, "instanceView")
+    else:
+        resource = compute_client.virtual_machines.get(resource_group_name=rgName, vm_name=vmName,expand="instanceView")
+    logger.debug("operation=get_vm vm=%s outcome=response_received elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
+    return resource
 
 
 def get_fence_subnet_for_config(ipConfig, network_client):
@@ -172,8 +190,8 @@ def get_subnet(vnet, subnetName):
     for avSubnet in vnet.subnets:
         logger.debug("{get_subnet} searching subnet %s testing subnet %s", subnetName, avSubnet.name)
         if (avSubnet.name.lower() == subnetName.lower()):
-                logger.debug("{get_subnet} subnet found %s", avSubnet)
-                return avSubnet
+            logger.debug("operation=get_subnet subnet=%s outcome=found", avSubnet.name)
+            return avSubnet
 
 def test_fence_subnet(fenceSubnet, nic, network_client):
     logger.info("{test_fence_subnet}")
@@ -225,35 +243,45 @@ def get_rule_for_nsg(nsg, ruleName, direction):
     return None
 
 def get_network_state(compute_client, network_client, rgName, vmName):
+    started = time.monotonic()
     result = FENCE_STATE_ON
+    checked_nics = 0
+    checked_configs = 0
+    logger.debug("operation=get_network_state vm=%s resource_group=%s outcome=started", vmName, rgName)
 
     try:
         vm = get_vm_resource(compute_client, rgName, vmName)
 
         allNICOK = True
         for nicRef in vm.network_profile.network_interfaces:
+            checked_nics += 1
             nicresource = get_azure_resource(nicRef.id)
             nic = network_client.network_interfaces.get(nicresource.ResourceGroupName, nicresource.ResourceName)
             for ipConfig in nic.ip_configurations:
+                checked_configs += 1
                 logger.info("{get_network_state} Testing ip configuration %s", ipConfig.name)
                 fenceSubnet = get_fence_subnet_for_config(ipConfig, network_client)
                 testOk = test_fence_subnet(fenceSubnet, nic, network_client)
                 if not testOk:
+                    logger.debug("operation=get_network_state vm=%s nic=%s ip_config=%s decision=not_isolated reason=invalid_fence_subnet", vmName, nicresource.ResourceName, ipConfig.name)
                     allNICOK = False
                 elif fenceSubnet.id.lower() != ipConfig.subnet.id.lower():
+                    logger.debug("operation=get_network_state vm=%s nic=%s ip_config=%s decision=not_isolated reason=subnet_mismatch", vmName, nicresource.ResourceName, ipConfig.name)
                     logger.info("{get_network_state} IP configuration %s is not in fence subnet (ip subnet: %s, fence subnet: %s)", ipConfig.name, ipConfig.subnet.id.lower(), fenceSubnet.id.lower())
                     allNICOK = False
         if allNICOK:
             logger.info("{get_network_state} All IP configurations of all network interfaces are in the fence subnet. Declaring VM as off")
             result = FENCE_STATE_OFF
     except Exception as e:
-        logger.debug("{get_network_state} Failed", exc_info=True)
+        logger.debug("operation=get_network_state vm=%s resource_group=%s outcome=failed elapsed_ms=%s", vmName, rgName, int((time.monotonic() - started) * 1000), exc_info=True)
         fail_usage(f"{{get_network_state}} Failed: {e}")
 
+    logger.debug("operation=get_network_state vm=%s reported_state=%s checked_nics=%s checked_ip_configs=%s elapsed_ms=%s", vmName, result, checked_nics, checked_configs, int((time.monotonic() - started) * 1000))
     return result
 
 def set_network_state(compute_client, network_client, rgName, vmName, operation):
     import msrestazure.azure_exceptions
+    started = time.monotonic()
     logger.info("{set_network_state} Setting state %s for  %s in resource group %s", operation, vmName, rgName)
 
     vm = get_vm_resource(compute_client,rgName, vmName)
@@ -261,6 +289,8 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
     operations = []
     for nicRef in vm.network_profile.network_interfaces:
         for attempt in range(MAX_RETRY):
+            attempt_started = time.monotonic()
+            logger.debug("operation=update_nic vm=%s nic=%s network_operation=%s attempt=%s/%s outcome=started", vmName, nicRef.id, operation, attempt + 1, MAX_RETRY)
             try:
                 nicresource = get_azure_resource(nicRef.id)
                 nic = network_client.network_interfaces.get(nicresource.ResourceGroupName, nicresource.ResourceName)
@@ -274,6 +304,7 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                         fenceSubnet = get_fence_subnet_for_config(ipConfig, network_client)
                         testOk = test_fence_subnet(fenceSubnet, nic, network_client)
                         if testOk:
+                            logger.debug("operation=update_nic vm=%s nic=%s ip_config=%s decision=move_to_fence_subnet", vmName, nicresource.ResourceName, ipConfig.name)
                             logger.info("{set_network_state} Changing subnet of ip config of nic %s", nic.id)
                             nic.tags[(f"{FENCE_TAG_SUBNET_ID}_{ipConfig.name}")] = ipConfig.subnet.id
                             nic.tags[(f"{FENCE_TAG_IP_TYPE}_{ipConfig.name}")] = ipConfig.private_ip_allocation_method
@@ -300,6 +331,7 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                             if not oldSubnet:
                                 fail_usage(f"{{set_network_state}} subnet {subnetId} not found")
 
+                            logger.debug("operation=update_nic vm=%s nic=%s ip_config=%s decision=restore_original_subnet", vmName, nicresource.ResourceName, ipConfig.name)
                             ipConfig.subnet = oldSubnet
                             ipConfig.private_ip_allocation_method = ipType
                             if ipAddress:
@@ -310,16 +342,24 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                 logger.info("{set_network_state} updating nic %s", nic.id)
                 op = network_client.network_interfaces.create_or_update(nicresource.ResourceGroupName, nicresource.ResourceName, nic)
                 operations.append(op)
+                logger.debug("operation=update_nic vm=%s nic=%s attempt=%s/%s outcome=request_submitted state_confirmed=false elapsed_ms=%s", vmName, nicresource.ResourceName, attempt + 1, MAX_RETRY, int((time.monotonic() - attempt_started) * 1000))
                 break
             except msrestazure.azure_exceptions.CloudError as cex:
-                logger.error("{set_network_state} CloudError in attempt %s '%s'", attempt, cex)
+                logger.log(logging.ERROR if attempt + 1 == MAX_RETRY else logging.WARNING,
+                           "operation=update_nic vm=%s nic=%s network_operation=%s attempt=%s/%s outcome=%s error_type=%s error_code=%s retry_wait_s=%s elapsed_ms=%s",
+                           vmName, nicRef.id, operation, attempt + 1, MAX_RETRY,
+                           "retry_exhausted" if attempt + 1 == MAX_RETRY else "retry_wait",
+                           type(cex).__name__, getattr(getattr(cex, "error", None), "error", None), RETRY_WAIT,
+                           int((time.monotonic() - attempt_started) * 1000))
                 if cex.error and cex.error.error and cex.error.error.lower() == "PrivateIPAddressIsBeingCleanedUp":
                     logger.error("{set_network_state} PrivateIPAddressIsBeingCleanedUp")
                 time.sleep(RETRY_WAIT)
 
             except Exception:
-                logger.exception("{set_network_state} Exception updating network interface")
+                logger.exception("operation=update_nic vm=%s nic=%s network_operation=%s attempt=%s/%s outcome=failed elapsed_ms=%s", vmName, nicRef.id, operation, attempt + 1, MAX_RETRY, int((time.monotonic() - attempt_started) * 1000))
                 break
+
+    logger.debug("operation=set_network_state vm=%s resource_group=%s network_operation=%s submitted_updates=%s state_confirmed=false elapsed_ms=%s", vmName, rgName, operation, len(operations), int((time.monotonic() - started) * 1000))
 
 def get_azure_config(options):
     config = AzureConfiguration()
@@ -343,16 +383,20 @@ def get_azure_config(options):
         logger.info("subscriptionId not provided. Using metadata service")
         config.SubscriptionId = get_from_metadata("subscriptionId")
 
+    logger.debug("operation=configuration resource_group=%s vm=%s cloud=%s auth_method=%s resource_group_source=%s subscription_source=%s", config.RGName, config.VMName, config.Cloud or AZURE_CLOUD_PUBLIC, "managed_identity" if config.UseMSI else "service_principal", "option" if options.get("--resourceGroup") else "imds", "option" if options.get("--subscriptionId") else "imds")
     return config
 
 # Function to fetch endpoints from metadata endpoint for azure_stack
 def get_cloud_from_arm_metadata_endpoint(arm_endpoint):
     import requests
 
+    started = time.monotonic()
+    logger.debug("operation=arm_metadata outcome=request_started")
     try:
         session = requests.Session()
         metadata_endpoint = arm_endpoint + "/metadata/endpoints?api-version=2015-01-01"
         response = session.get(metadata_endpoint)
+        logger.debug("operation=arm_metadata http_status=%s outcome=response_received elapsed_ms=%s", response.status_code, int((time.monotonic() - started) * 1000))
         if response.status_code == 200:
             metadata = response.json()
             return {
@@ -363,6 +407,7 @@ def get_cloud_from_arm_metadata_endpoint(arm_endpoint):
         else:
             fail_usage(f"Failed to get cloud from metadata endpoint: {arm_endpoint} - HTTP {response.status_code}")
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as e:
+        logger.debug("operation=arm_metadata outcome=failed error_type=%s elapsed_ms=%s", type(e).__name__, int((time.monotonic() - started) * 1000))
         fail_usage(f"Failed to get cloud from metadata endpoint: {arm_endpoint} - {e}")
 
 def get_azure_arm_endpoints(cloudName, authority):
@@ -393,6 +438,7 @@ def get_azure_cloud_environment(config):
     try:
         from azure.identity import AzureAuthorityHosts
 
+        logger.debug("operation=cloud_selection cloud=%s sdk=azure.identity", config.Cloud)
         azureCloudName = AZURE_CLOUD_NAME_PUBLIC
         authorityHosts = AzureAuthorityHosts.AZURE_PUBLIC_CLOUD
         if (config.Cloud.lower() == AZURE_CLOUD_CHINA):
@@ -408,6 +454,7 @@ def get_azure_cloud_environment(config):
         return get_azure_arm_endpoints(azureCloudName, authorityHosts)
 
     except ImportError:
+        logger.debug("operation=cloud_selection cloud=%s sdk=msrestazure reason=legacy_sdk", config.Cloud)
         if (config.Cloud.lower() == AZURE_CLOUD_PUBLIC):
             from msrestazure.azure_cloud import AZURE_PUBLIC_CLOUD
             cloud_environment = AZURE_PUBLIC_CLOUD
@@ -438,15 +485,18 @@ def get_azure_credentials(config):
     if config.UseMSI:
         try:
             from azure.identity import ManagedIdentityCredential
+            logger.debug("operation=credentials auth_method=managed_identity implementation=ManagedIdentityCredential")
             credentials = ManagedIdentityCredential(authority=cloud_environment["authority_hosts"])
         except ImportError:
             from msrestazure.azure_active_directory import MSIAuthentication
+            logger.debug("operation=credentials auth_method=managed_identity implementation=MSIAuthentication reason=legacy_sdk")
             credentials = MSIAuthentication(cloud_environment=cloud_environment["cloud_environment"])
         return credentials
 
     try:
         # try to use new libraries ClientSecretCredential (azure.identity, based on azure.core)
         from azure.identity import ClientSecretCredential
+        logger.debug("operation=credentials auth_method=service_principal implementation=ClientSecretCredential")
         credentials = ClientSecretCredential(
             client_id = config.ApplicationId,
             client_secret = config.ApplicationKey,
@@ -456,6 +506,7 @@ def get_azure_credentials(config):
     except ImportError:
          # use old libraries ServicePrincipalCredentials (azure.common) if new one is not available
         from azure.common.credentials import ServicePrincipalCredentials
+        logger.debug("operation=credentials auth_method=service_principal implementation=ServicePrincipalCredentials reason=legacy_sdk")
         credentials = ServicePrincipalCredentials(
             client_id = config.ApplicationId,
             secret = config.ApplicationKey,
@@ -468,6 +519,7 @@ def get_azure_credentials(config):
 def get_azure_compute_client(config):
     from azure.mgmt.compute import ComputeManagementClient
 
+    started = time.monotonic()
     cloud_environment = get_azure_cloud_environment(config)
     credentials = get_azure_credentials(config)
 
@@ -498,6 +550,7 @@ def get_azure_compute_client(config):
             api_version=compute_api_version
         )
     except TypeError:
+        logger.debug("operation=compute_client reason=constructor_compatibility_fallback")
         compute_client = ComputeManagementClient(
             credentials,
             config.SubscriptionId,
@@ -505,11 +558,13 @@ def get_azure_compute_client(config):
             api_version=compute_api_version
         )
 
+    logger.debug("operation=compute_client cloud=%s api_version=%s outcome=client_created elapsed_ms=%s", config.Cloud, compute_api_version, int((time.monotonic() - started) * 1000))
     return compute_client
 
 def get_azure_network_client(config):
     from azure.mgmt.network import NetworkManagementClient
 
+    started = time.monotonic()
     cloud_environment = get_azure_cloud_environment(config)
     credentials = get_azure_credentials(config)
 
@@ -534,10 +589,12 @@ def get_azure_network_client(config):
             api_version=NETWORK_MGMT_CLIENT_API_VERSION
         )
     except TypeError:
+        logger.debug("operation=network_client reason=constructor_compatibility_fallback")
         network_client = NetworkManagementClient(
             credentials,
             config.SubscriptionId,
             base_url=cloud_environment["resource_manager"],
             api_version=NETWORK_MGMT_CLIENT_API_VERSION
         )
+    logger.debug("operation=network_client cloud=%s api_version=%s outcome=client_created elapsed_ms=%s", config.Cloud, NETWORK_MGMT_CLIENT_API_VERSION, int((time.monotonic() - started) * 1000))
     return network_client

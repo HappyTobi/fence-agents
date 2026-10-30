@@ -3,6 +3,7 @@
 import sys, re, pexpect
 import logging
 import atexit
+import time
 import xml.etree.ElementTree as ET
 sys.path.append("@FENCEAGENTSLIBDIR@")
 from fencing import *
@@ -12,19 +13,22 @@ import azure_fence
 logger = logging.getLogger(__name__)
 
 def get_nodes_list(clients, options):
+    started = time.monotonic()
     result = {}
 
     if clients:
         compute_client = clients[0]
         rgName = options["--resourceGroup"]
+        logger.debug("operation=list resource_group=%s outcome=request_started", rgName)
         vms = azure_fence.get_vm_list(compute_client,rgName)
         try:
             for vm in vms:
                 result[vm.name] = ("", None)
         except Exception as e:
-            logger.debug("Failed to list virtual machines", exc_info=True)
+            logger.debug("operation=list resource_group=%s outcome=failed elapsed_ms=%s", rgName, int((time.monotonic() - started) * 1000), exc_info=True)
             fail_usage(f"Failed: {e}")
 
+        logger.debug("operation=list outcome=complete vm_count=%s elapsed_ms=%s", len(result), int((time.monotonic() - started) * 1000))
     return result
 
 def check_unfence(clients, options):
@@ -41,6 +45,7 @@ def check_unfence(clients, options):
 
         for vm in vms:
             vmName = vm.name
+            logger.debug("operation=check_unfence vm=%s resource_group=%s outcome=checking_network", vmName, rgName)
             if azure_fence.get_network_state(compute_client, network_client, rgName, vmName) == "off":
                 logger.info("Found fenced node %s", vmName)
                 # dont return "off" based on network-fencing status
@@ -52,8 +57,11 @@ def check_unfence(clients, options):
                     options["--action"] = "on"
                     set_power_status(clients, options)
                     options["--action"] = "monitor"
+                else:
+                    logger.debug("operation=check_unfence vm=%s decision=wait reason=power_not_off", vmName)
 
 def get_power_status(clients, options):
+    started = time.monotonic()
     vmstate = { "running": "on",
                 "deallocated": "off",
                 "stopped": "off" }
@@ -63,6 +71,7 @@ def get_power_status(clients, options):
         compute_client = clients[0]
         rgName = options["--resourceGroup"]
         vmName = options["--plug"]
+        logger.debug("operation=get_power_status vm=%s resource_group=%s action=%s network_fencing=%s", vmName, rgName, options["--action"], "--network-fencing" in options)
 
         if "--network-fencing" in options:
             network_client = clients[1]
@@ -72,13 +81,14 @@ def get_power_status(clients, options):
             # return off quickly once network is fenced instead of waiting for vm state to change
             if options["--action"] == "off" and netState == "off":
                 logger.info("Network fenced for %s", vmName)
+                logger.debug("operation=get_power_status vm=%s reported_state=off reason=network_isolated power_state_checked=false elapsed_ms=%s", vmName, int((time.monotonic() - started) * 1000))
                 return netState
 
         powerState = "unknown"
         try:
             vmStatus = azure_fence.get_vm_resource(compute_client, rgName, vmName)
         except Exception as e:
-            logger.debug("Failed to get virtual machine power status", exc_info=True)
+            logger.debug("operation=get_power_status vm=%s resource_group=%s outcome=failed elapsed_ms=%s", vmName, rgName, int((time.monotonic() - started) * 1000), exc_info=True)
             fail_usage(f"Failed: {e}")
 
         for status in vmStatus.instance_view.statuses:
@@ -88,16 +98,21 @@ def get_power_status(clients, options):
 
         vmState = vmstate.get(powerState, "unknown")
         logger.info("Found power state of VM: %s (%s)", vmState, powerState)
+        logger.debug("operation=get_power_status vm=%s azure_power_state=%s mapped_power_state=%s elapsed_ms=%s", vmName, powerState, vmState, int((time.monotonic() - started) * 1000))
 
         if "--network-fencing" in options and netState == "off":
+            logger.debug("operation=get_power_status vm=%s reported_state=off reason=network_isolated", vmName)
             return "off"
 
         if options["--action"] != "on" and vmState != "off":
+            logger.debug("operation=get_power_status vm=%s reported_state=on reason=power_not_confirmed_off", vmName)
             return "on"
 
         if vmState == "on":
+            logger.debug("operation=get_power_status vm=%s reported_state=on reason=vm_running", vmName)
             return "on"
 
+        logger.debug("operation=get_power_status vm=%s reported_state=off reason=power_not_running", vmName)
         return "off"
 
 def set_power_status(clients, options):
