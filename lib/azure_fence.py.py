@@ -23,6 +23,16 @@ NETWORK_MGMT_CLIENT_API_VERSION = "2021-05-01"
 AZURE_RHEL8_COMPUTE_VERSION = "27.2.0"
 AZURE_COMPUTE_VERSION_5 = "5.0.0"
 
+# Azure cloud environment constants
+AZURE_CLOUD_PUBLIC = "public"
+AZURE_CLOUD_CHINA = "china"
+AZURE_CLOUD_US_GOV = "usgov"
+AZURE_CLOUD_GERMANY = "germany"
+AZURE_CLOUD_STACK = "stack"
+AZURE_CLOUD_NAME_PUBLIC = "AZURE_PUBLIC_CLOUD"
+AZURE_CLOUD_NAME_CHINA = "AZURE_CHINA_CLOUD"
+AZURE_CLOUD_NAME_US_GOV = "AZURE_US_GOV_CLOUD"
+
 class AzureSubResource:
     Type = None
     Name = None
@@ -72,7 +82,6 @@ def get_azure_resource(id):
     resource = AzureResource()
     resource.Id = id
     resource.SubscriptionId = match.group(2)
-    resource.SubResources = []
 
     if len(match.groups()) > 3:
         resource.ResourceGroupName = match.group(3)
@@ -357,17 +366,17 @@ def get_azure_arm_endpoints(cloudName, authority):
         "authority_hosts": authority
     }
 
-    if cloudName == "AZURE_CHINA_CLOUD":
+    if cloudName == AZURE_CLOUD_NAME_CHINA:
         cloudEnvironment["resource_manager"] = "https://management.chinacloudapi.cn/"
         cloudEnvironment["credential_scopes"] = ["https://management.chinacloudapi.cn/.default"]
         return cloudEnvironment
 
-    if cloudName == "AZURE_US_GOV_CLOUD":
+    if cloudName == AZURE_CLOUD_NAME_US_GOV:
         cloudEnvironment["resource_manager"] = "https://management.usgovcloudapi.net/"
         cloudEnvironment["credential_scopes"] = ["https://management.core.usgovcloudapi.net/.default"]
         return cloudEnvironment
 
-    if cloudName == "AZURE_PUBLIC_CLOUD":
+    if cloudName == AZURE_CLOUD_NAME_PUBLIC:
         cloudEnvironment["resource_manager"] = "https://management.azure.com/"
         cloudEnvironment["credential_scopes"] = ["https://management.azure.com/.default"]
         return cloudEnvironment
@@ -375,39 +384,39 @@ def get_azure_arm_endpoints(cloudName, authority):
 
 def get_azure_cloud_environment(config):
     if (config.Cloud is None):
-        config.Cloud = "public"
+        config.Cloud = AZURE_CLOUD_PUBLIC
 
     try:
         from azure.identity import AzureAuthorityHosts
 
-        azureCloudName = "AZURE_PUBLIC_CLOUD"
+        azureCloudName = AZURE_CLOUD_NAME_PUBLIC
         authorityHosts = AzureAuthorityHosts.AZURE_PUBLIC_CLOUD
-        if (config.Cloud.lower() == "china"):
-            azureCloudName = "AZURE_CHINA_CLOUD"
+        if (config.Cloud.lower() == AZURE_CLOUD_CHINA):
+            azureCloudName = AZURE_CLOUD_NAME_CHINA
             authorityHosts = AzureAuthorityHosts.AZURE_CHINA
-        elif (config.Cloud.lower() == "usgov"):
-            azureCloudName = "AZURE_US_GOV_CLOUD"
+        elif (config.Cloud.lower() == AZURE_CLOUD_US_GOV):
+            azureCloudName = AZURE_CLOUD_NAME_US_GOV
             authorityHosts = AzureAuthorityHosts.AZURE_GOVERNMENT
-        elif (config.Cloud.lower() == "stack"):
+        elif (config.Cloud.lower() == AZURE_CLOUD_STACK):
             # use custom function to call the azuer stack metadata endpoint to get required configuration.
             return get_cloud_from_arm_metadata_endpoint(config.MetadataEndpoint)
 
         return get_azure_arm_endpoints(azureCloudName, authorityHosts)
 
     except ImportError:
-        if (config.Cloud.lower() == "public"):
+        if (config.Cloud.lower() == AZURE_CLOUD_PUBLIC):
             from msrestazure.azure_cloud import AZURE_PUBLIC_CLOUD
             cloud_environment = AZURE_PUBLIC_CLOUD
-        elif (config.Cloud.lower() == "china"):
+        elif (config.Cloud.lower() == AZURE_CLOUD_CHINA):
             from msrestazure.azure_cloud import AZURE_CHINA_CLOUD
             cloud_environment = AZURE_CHINA_CLOUD
-        elif (config.Cloud.lower() == "germany"):
+        elif (config.Cloud.lower() == AZURE_CLOUD_GERMANY):
             from msrestazure.azure_cloud import AZURE_GERMAN_CLOUD
             cloud_environment = AZURE_GERMAN_CLOUD
-        elif (config.Cloud.lower() == "usgov"):
+        elif (config.Cloud.lower() == AZURE_CLOUD_US_GOV):
             from msrestazure.azure_cloud import AZURE_US_GOV_CLOUD
             cloud_environment = AZURE_US_GOV_CLOUD
-        elif (config.Cloud.lower() == "stack"):
+        elif (config.Cloud.lower() == AZURE_CLOUD_STACK):
             from msrestazure.azure_cloud import get_cloud_from_metadata_endpoint
             cloud_environment = get_cloud_from_metadata_endpoint(config.MetadataEndpoint)
 
@@ -467,12 +476,12 @@ def get_azure_compute_client(config):
 
     logger.debug("{get_azure_compute_client} use virtual_machine api version: %s", compute_api_version)
 
-    if (config.Cloud.lower() == "stack") and not config.MetadataEndpoint:
+    if (config.Cloud.lower() == AZURE_CLOUD_STACK) and not config.MetadataEndpoint:
             fail_usage("metadata-endpoint not specified")
 
     try:
         from azure.profiles import KnownProfiles
-        if (config.Cloud.lower() == "stack"):
+        if (config.Cloud.lower() == AZURE_CLOUD_STACK):
             client_profile = KnownProfiles.v2020_09_01_hybrid
         else:
             client_profile = KnownProfiles.default
@@ -500,13 +509,13 @@ def get_azure_network_client(config):
     cloud_environment = get_azure_cloud_environment(config)
     credentials = get_azure_credentials(config)
 
-    if (config.Cloud.lower() == "stack") and not config.MetadataEndpoint:
+    if (config.Cloud.lower() == AZURE_CLOUD_STACK) and not config.MetadataEndpoint:
         fail_usage("metadata-endpoint not specified")
 
 
     from azure.profiles import KnownProfiles
 
-    if (config.Cloud.lower() == "stack"):
+    if (config.Cloud.lower() == AZURE_CLOUD_STACK):
         client_profile = KnownProfiles.v2020_09_01_hybrid
     else:
         client_profile = KnownProfiles.default
