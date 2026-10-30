@@ -23,6 +23,10 @@ NETWORK_MGMT_CLIENT_API_VERSION = "2021-05-01"
 AZURE_RHEL8_COMPUTE_VERSION = "27.2.0"
 AZURE_COMPUTE_VERSION_5 = "5.0.0"
 
+# Azure Instance Metadata Service (IMDS) endpoint and API version
+AZURE_IMDS_ENDPOINT = "http://169.254.169.254/metadata/instance"
+AZURE_IMDS_API_VERSION = "2017-08-01"
+
 # Azure cloud environment constants
 AZURE_CLOUD_PUBLIC = "public"
 AZURE_CLOUD_CHINA = "china"
@@ -60,7 +64,7 @@ class AzureConfiguration:
 def get_from_metadata(parameter):
     import requests
     try:
-        r = requests.get('http://169.254.169.254/metadata/instance?api-version=2017-08-01', headers = {"Metadata":"true"})
+        r = requests.get(AZURE_IMDS_ENDPOINT, params={"api-version": AZURE_IMDS_API_VERSION}, headers = {"Metadata":"true"})
         logger.debug("metadata: %s", r.json())
         return str(r.json()["compute"][parameter])
     except (requests.RequestException, ValueError, KeyError, TypeError):
