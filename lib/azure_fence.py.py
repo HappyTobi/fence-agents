@@ -79,7 +79,7 @@ def get_from_metadata(parameter):
 def get_azure_resource(id):
     match = re.match(r'(/subscriptions/([^/]*)/resourceGroups/([^/]*))(/providers/([^/]*/[^/]*)/([^/]*))?((/([^/]*)/([^/]*))*)', id)
     if not match:
-        fail_usage(f"{{get_azure_resource}} cannot parse resource id {id}")
+        fail_usage("{get_azure_resource} cannot parse resource id %s" % id)
 
     logger.debug("{get_azure_resource} found %s matches for %s", len(match.groups()), id)
     iGroup = 0
@@ -274,7 +274,7 @@ def get_network_state(compute_client, network_client, rgName, vmName):
             result = FENCE_STATE_OFF
     except Exception as e:
         logger.debug("operation=get_network_state vm=%s resource_group=%s outcome=failed elapsed_ms=%s", vmName, rgName, int((time.monotonic() - started) * 1000), exc_info=True)
-        fail_usage(f"{{get_network_state}} Failed: {e}")
+        fail_usage("{get_network_state} Failed: %s" % e)
 
     logger.debug("operation=get_network_state vm=%s reported_state=%s checked_nics=%s checked_ip_configs=%s elapsed_ms=%s", vmName, result, checked_nics, checked_configs, int((time.monotonic() - started) * 1000))
     return result
@@ -306,20 +306,20 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                         if testOk:
                             logger.debug("operation=update_nic vm=%s nic=%s ip_config=%s decision=move_to_fence_subnet", vmName, nicresource.ResourceName, ipConfig.name)
                             logger.info("{set_network_state} Changing subnet of ip config of nic %s", nic.id)
-                            nic.tags[(f"{FENCE_TAG_SUBNET_ID}_{ipConfig.name}")] = ipConfig.subnet.id
-                            nic.tags[(f"{FENCE_TAG_IP_TYPE}_{ipConfig.name}")] = ipConfig.private_ip_allocation_method
-                            nic.tags[(f"{FENCE_TAG_IP}_{ipConfig.name}")] = ipConfig.private_ip_address
+                            nic.tags["%s_%s" % (FENCE_TAG_SUBNET_ID, ipConfig.name)] = ipConfig.subnet.id
+                            nic.tags["%s_%s" % (FENCE_TAG_IP_TYPE, ipConfig.name)] = ipConfig.private_ip_allocation_method
+                            nic.tags["%s_%s" % (FENCE_TAG_IP, ipConfig.name)] = ipConfig.private_ip_address
                             ipConfig.subnet = fenceSubnet
                             ipConfig.private_ip_allocation_method = IP_TYPE_DYNAMIC
                         else:
-                            fail_usage(f"{{set_network_state}} Network interface id {nic.id} does not have a network security group.")
+                            fail_usage("{set_network_state} Network interface id %s does not have a network security group." % nic.id)
                     elif operation == "unblock":
                         if not nic.tags:
-                            fail_usage(f"{{set_network_state}} IP configuration {ipConfig.name} is missing the required resource tags (empty)")
+                            fail_usage("{set_network_state} IP configuration %s is missing the required resource tags (empty)" % ipConfig.name)
 
-                        subnetId = nic.tags.pop(f"{FENCE_TAG_SUBNET_ID}_{ipConfig.name}")
-                        ipType = nic.tags.pop(f"{FENCE_TAG_IP_TYPE}_{ipConfig.name}")
-                        ipAddress = nic.tags.pop(f"{FENCE_TAG_IP}_{ipConfig.name}")
+                        subnetId = nic.tags.pop("%s_%s" % (FENCE_TAG_SUBNET_ID, ipConfig.name))
+                        ipType = nic.tags.pop("%s_%s" % (FENCE_TAG_IP_TYPE, ipConfig.name))
+                        ipAddress = nic.tags.pop("%s_%s" % (FENCE_TAG_IP, ipConfig.name))
 
                         if (subnetId and ipType and (ipAddress or (ipType.lower() == IP_TYPE_DYNAMIC.lower()))):
                             logger.info("{set_network_state} tags found (subnetId: %s, ipType: %s, ipAddress: %s)", subnetId, ipType, ipAddress)
@@ -329,7 +329,7 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                             logger.info("{set_network_state} looking for subnet %s", len(subnetResource.SubResources))
                             oldSubnet = get_subnet(vnet, subnetResource.SubResources[0].Name)
                             if not oldSubnet:
-                                fail_usage(f"{{set_network_state}} subnet {subnetId} not found")
+                                fail_usage("{set_network_state} subnet %s not found" % subnetId)
 
                             logger.debug("operation=update_nic vm=%s nic=%s ip_config=%s decision=restore_original_subnet", vmName, nicresource.ResourceName, ipConfig.name)
                             ipConfig.subnet = oldSubnet
@@ -337,7 +337,7 @@ def set_network_state(compute_client, network_client, rgName, vmName, operation)
                             if ipAddress:
                                 ipConfig.private_ip_address = ipAddress
                         else:
-                            fail_usage(f"{{set_network_state}} IP configuration {ipConfig.name} is missing the required resource tags(subnetId: {subnetId}, ipType: {ipType}, ipAddress: {ipAddress})")
+                            fail_usage("{set_network_state} IP configuration %s is missing the required resource tags(subnetId: %s, ipType: %s, ipAddress: %s)" % (ipConfig.name, subnetId, ipType, ipAddress))
 
                 logger.info("{set_network_state} updating nic %s", nic.id)
                 op = network_client.network_interfaces.create_or_update(nicresource.ResourceGroupName, nicresource.ResourceName, nic)
@@ -405,10 +405,10 @@ def get_cloud_from_arm_metadata_endpoint(arm_endpoint):
                 "authority_hosts":  metadata['authentication'].get('loginEndpoint').replace("https://","")
             }
         else:
-            fail_usage(f"Failed to get cloud from metadata endpoint: {arm_endpoint} - HTTP {response.status_code}")
+            fail_usage("Failed to get cloud from metadata endpoint: %s - HTTP %s" % (arm_endpoint, response.status_code))
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as e:
         logger.debug("operation=arm_metadata outcome=failed error_type=%s elapsed_ms=%s", type(e).__name__, int((time.monotonic() - started) * 1000))
-        fail_usage(f"Failed to get cloud from metadata endpoint: {arm_endpoint} - {e}")
+        fail_usage("Failed to get cloud from metadata endpoint: %s - %s" % (arm_endpoint, e))
 
 def get_azure_arm_endpoints(cloudName, authority):
     cloudEnvironment = {
